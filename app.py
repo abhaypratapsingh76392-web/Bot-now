@@ -8,7 +8,6 @@ SECRET_KEY = "Akshay12apidev"
 
 playwright_instance = None
 browser = None
-# Concurrent requests se RAM crash bachane ke liye semaphore
 semaphore = asyncio.Semaphore(1)
 
 @asynccontextmanager
@@ -16,7 +15,6 @@ async def lifespan(app: FastAPI):
     global playwright_instance, browser
     playwright_instance = await async_playwright().start()
     
-    # Render Linux environment ke liye stable aur fast flags
     browser = await playwright_instance.chromium.launch(
         headless=True,
         args=[
@@ -43,7 +41,7 @@ async def run_flow(number: str, otp: str = None):
             viewport={"width": 360, "height": 640}
         )
         
-        # Fast Speed: Unnecessary files block karna
+        # Superfast Loading: Unnecessary resource request cancel karna
         await context.route(
             "**/*",
             lambda route: route.abort() if route.request.resource_type in ["image", "stylesheet", "font", "media", "other"] else route.continue_()
@@ -52,11 +50,11 @@ async def run_flow(number: str, otp: str = None):
         page = await context.new_page()
         
         try:
-            # 1. Open URL with fast load
+            # 1. Open URL
             await page.goto("https://m.krsnaarpl.com/validate-login.html", wait_until="domcontentloaded", timeout=15000)
             
-            # 2. Fill Mobile Number
-            phone_input = page.locator('input[placeholder="Enter mobile No."]', 'input[type="tel"]').first
+            # 2. Fill Mobile Number (Corrected locator syntax)
+            phone_input = page.locator('input[placeholder="Enter mobile No."], input[type="tel"], input[type="text"]').first
             await phone_input.wait_for(timeout=5000)
             await phone_input.fill(number)
             

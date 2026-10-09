@@ -16,27 +16,43 @@ def run_playwright_flow(number, otp=None):
         with sync_playwright() as p:
             # हेडलेस ब्राउज़र लॉन्च करें
             browser = p.chromium.launch(headless=True)
-            context = browser.new_context()
+            
+            # ⚡ स्टेल्थ मोड: ब्राउज़र को असली यूज़र की तरह बनाएं
+            context = browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            )
+            # बॉट डिटेक्शन हटाएं
+            context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
 
             # ⚡ स्पीड बूस्टर: इमेज, फॉन्ट, CSS, विज्ञापन सब ब्लॉक करें
             context.route("**/*", lambda route: route.abort() if route.request.resource_type in ["image", "media", "font", "stylesheet", "other"] else route.continue_())
 
             page = context.new_page()
+            # सभी एक्शन्स के लिए डिफ़ॉल्ट टाइमआउट 60 सेकंड कर दें
+            page.set_default_timeout(60000)
 
             try:
                 # 1. पेज पर जाएं (90 सेकंड का टाइमआउट, ताकि कभी टाइमआउट एरर न आए)
-                # domcontentloaded का मतलब है कि पूरी इमेज लोड होने का इंतज़ार न करें, सिर्फ HTML लोड होते ही आगे बढ़ें
                 page.goto("https://m.krsnaarpl.com/validate-login.html", timeout=90000, wait_until="domcontentloaded")
 
-                # 2. मोबाइल नंबर भरें (30 सेकंड का टाइमआउट)
-                page.fill('input[placeholder="Enter mobile No."]', number, timeout=30000)
+                # 2. मोबाइल नंबर भरें (Fallback Selectors का उपयोग करें)
+                try:
+                    page.fill('input[placeholder="Enter mobile No."]', number, timeout=30000)
+                except:
+                    try:
+                        page.fill('input[type="tel"]', number, timeout=10000)
+                    except:
+                        page.fill('input[type="text"]', number, timeout=10000)
 
                 # 3. Get OTP बटन पर क्लिक करें
-                page.click('text=Get OTP', timeout=30000)
-
-                # 4. OTP भेजे जाने का इंतज़ार करें (45 सेकंड का टाइमआउट)
                 try:
-                    page.wait_for_selector('text=OTP has been sent', timeout=45000)
+                    page.click('text=Get OTP', timeout=30000)
+                except:
+                    page.click('button:has-text("Get OTP")', timeout=10000)
+
+                # 4. OTP भेजे जाने का इंतज़ार करें (60 सेकंड का टाइमआउट)
+                try:
+                    page.wait_for_selector('text=OTP has been sent', timeout=60000)
                 except:
                     return {"status": "error", "message": "OTP send होने में समय लग रहा है या नंबर रजिस्टर्ड नहीं है।"}
 
@@ -53,11 +69,14 @@ def run_playwright_flow(number, otp=None):
                     return {"status": "error", "message": "OTP इनपुट बॉक्स नहीं मिले।"}
 
                 # 6. Validate OTP बटन पर क्लिक करें
-                page.click('text=Validate OTP', timeout=30000)
-
-                # 7. लॉगिन सफल होने का इंतज़ार करें (45 सेकंड का टाइमआउट)
                 try:
-                    page.wait_for_selector('text=My Reports', timeout=45000)
+                    page.click('text=Validate OTP', timeout=30000)
+                except:
+                    page.click('button:has-text("Validate OTP")', timeout=10000)
+
+                # 7. लॉगिन सफल होने का इंतज़ार करें (60 सेकंड का टाइमआउट)
+                try:
+                    page.wait_for_selector('text=My Reports', timeout=60000)
                     return {"status": "success", "message": "OTP verified and login successful! Session cleared."}
                 except:
                     return {"status": "error", "message": "गलत OTP या लॉगिन फेल हो गया।"}

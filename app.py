@@ -1,33 +1,31 @@
 from flask import Flask, request, jsonify
 from playwright.sync_api import sync_playwright
 import os
-import time
 
 app = Flask(__name__)
 
-# Rate Limiting के लिए डिक्शनरी (नंबर -> आखिरी बार OTP भेजने का समय)
-last_sent_time = {}
-COOLDOWN_SECONDS = 60  # 60 सेकंड तक दोबारा OTP नहीं भेजेगा
+# 🔒 नई Secret Key
+SECRET_KEY = "Akshay12apidev"
 
 def run_playwright_flow(number, otp=None):
     with sync_playwright() as p:
         # हेडलेस ब्राउज़र लॉन्च करें
         browser = p.chromium.launch(headless=True)
-        # हर बार नया कॉन्टेक्स्ट बनाएं ताकि कोई पुराना डेटा न रहे
+        # हर बार नया कॉन्टेक्स्ट बनाएं ताकि कोई पुराना डेटा न रहे (ऑटो लॉगआउट)
         context = browser.new_context()
         page = context.new_page()
         
         try:
-            # 1. पेज पर जाएं (टाइमआउट कम कर दिया है ताकि फास्ट हो)
+            # 1. पेज पर जाएं
             page.goto("https://m.krsnaarpl.com/validate-login.html", timeout=20000)
             
-            # 2. मोबाइल नंबर भरें
+            # 2. सिर्फ उसी नंबर को भरें जो रिक्वेस्ट में आया है
             page.fill('input[placeholder="Enter mobile No."]', number, timeout=5000)
             
             # 3. Get OTP बटन पर क्लिक करें
             page.click('text=Get OTP', timeout=5000)
             
-            # 4. OTP भेजे जाने का इंतज़ार करें (अधिकतम 8 सेकंड)
+            # 4. OTP भेजे जाने का इंतज़ार करें
             try:
                 page.wait_for_selector('text=OTP has been sent', timeout=8000)
             except:
@@ -38,7 +36,6 @@ def run_playwright_flow(number, otp=None):
                 return {"status": "success", "message": f"OTP sent successfully to {number}"}
             
             # 5. OTP वेरिफिकेशन का प्रोसेस
-            # स्क्रीनशॉट के अनुसार 4 बॉक्स हैं (maxlength="1")
             otp_inputs = page.locator('input[maxlength="1"]')
             count = otp_inputs.count()
             
@@ -53,7 +50,7 @@ def run_playwright_flow(number, otp=None):
             # 6. Validate OTP बटन पर क्लिक करें
             page.click('text=Validate OTP', timeout=5000)
             
-            # 7. लॉगिन सफल होने का इंतज़ार करें (जैसे "My Reports" दिखना)
+            # 7. लॉगिन सफल होने का इंतज़ार करें
             try:
                 page.wait_for_selector('text=My Reports', timeout=10000)
                 return {"status": "success", "message": "OTP verified and login successful! Session cleared."}
@@ -68,48 +65,34 @@ def run_playwright_flow(number, otp=None):
 
 @app.route('/sent', methods=['GET'])
 def sent_otp():
+    # 🔒 की (Key) चेक करें
+    key = request.args.get('key')
+    if key != SECRET_KEY:
+        return jsonify({"status": "error", "message": "Unauthorized: Invalid Key"}), 401
+
     number = request.args.get('number')
     if not number:
         return jsonify({"status": "error", "message": "Mobile number is required"}), 400
     
-    # Rate Limiting चेक करें (बार-बार OTP रोकने के लिए)
-    current_time = time.time()
-    if number in last_sent_time:
-        time_passed = current_time - last_sent_time[number]
-        if time_passed < COOLDOWN_SECONDS:
-            remaining = int(COOLDOWN_SECONDS - time_passed)
-            return jsonify({
-                "status": "error", 
-                "message": f"कृपया {remaining} सेकंड प्रतीक्षा करें। इस नंबर पर OTP पहले ही भेजा जा चुका है।"
-            }), 429
-
-    # अगर कूलडाउन खत्म हो गया है, तो OTP भेजें
+    # सीधे OTP भेजें (कोई कूलडाउन नहीं, जितनी बार चाहें उतनी बार)
     result = run_playwright_flow(number)
-    
-    # अगर OTP सफलतापूर्वक भेज दिया गया, तो टाइमर सेट करें
-    if result.get("status") == "success":
-        last_sent_time[number] = time.time()
-        
     return jsonify(result)
 
 @app.route('/verify', methods=['GET'])
 def verify_otp():
+    # 🔒 की (Key) चेक करें
+    key = request.args.get('key')
+    if key != SECRET_KEY:
+        return jsonify({"status": "error", "message": "Unauthorized: Invalid Key"}), 401
+
     number = request.args.get('number')
     otp = request.args.get('otp')
     
     if not number or not otp:
         return jsonify({"status": "error", "message": "Both number and OTP are required"}), 400
     
-    # नोट: यहाँ हम कूलडाउन चेक नहीं कर रहे क्योंकि यूजर OTP वेरिफाई करना चाहता है।
-    # लेकिन Playwright फिर से "Get OTP" क्लिक करेगा, इसलिए हम कूलडाउन को रीसेट कर देंगे ताकि यूजर ब्लॉक न हो।
-    # हालांकि, अगर बहुत ज्यादा रिक्वेस्ट आ रही हैं, तो हम कूलडाउन चेक कर सकते हैं।
-    
+    # सीधे OTP वेरिफाई करें
     result = run_playwright_flow(number, otp)
-    
-    # वेरिफिकेशन के बाद भी कूलडाउन अपडेट कर दें ताकि तुरंत दोबारा OTP न मंगाया जा सके
-    if result.get("status") == "success":
-        last_sent_time[number] = time.time()
-        
     return jsonify(result)
 
 if __name__ == '__main__':

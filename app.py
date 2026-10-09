@@ -11,7 +11,6 @@ SECRET_KEY = "Akshay12apidev"
 playwright_instance = None
 browser = None
 
-# Active Sessions: number -> {"context": context, "page": page, "created_at": time}
 active_sessions = {}
 sessions_lock = asyncio.Lock()
 SESSION_TIMEOUT = 180  # 3 minutes auto-cleanup
@@ -110,7 +109,7 @@ async def sent_otp(key: str = Query(None), number: str = Query(None)):
         await phone_input.fill(clean_num, timeout=10000)
         
         # Click Get OTP
-        await page.click('text=Get OTP', timeout=8000)
+        await page.get_by_text("Get OTP").first.click(timeout=8000)
         
         # Wait for OTP Sent notification
         await page.wait_for_selector('text=OTP has been sent', timeout=12000)
@@ -130,7 +129,7 @@ async def sent_otp(key: str = Query(None), number: str = Query(None)):
         return {"status": "error", "message": f"Automation Error: {str(e)}"}
 
 # -------------------------------------------------------------
-# STEP 2: Precise Digit-by-Digit OTP Fill (Superfast & No Bug)
+# STEP 2: Precise Digit-by-Digit OTP Fill & Safe Click
 # -------------------------------------------------------------
 @app.get("/verify")
 async def verify_otp(key: str = Query(None), number: str = Query(None), otp: str = Query(None)):
@@ -157,14 +156,14 @@ async def verify_otp(key: str = Query(None), number: str = Query(None), otp: str
         box_count = await otp_inputs.count()
 
         if box_count >= len(clean_otp):
-            # HAR DIGIT KO USKE EXACT BOX ME DALEGA (Box 0 = Digit 1, Box 1 = Digit 2...)
+            # Digit 1 -> Box 0, Digit 2 -> Box 1, Digit 3 -> Box 2, Digit 4 -> Box 3
             for i in range(len(clean_otp)):
                 box = otp_inputs.nth(i)
                 digit = clean_otp[i]
                 
                 await box.fill(digit)
                 
-                # JS Event Trigger (Krsnaa React/JS State update ke liye)
+                # JS State Sync Event
                 await box.evaluate("""el => {
                     el.dispatchEvent(new Event('input', { bubbles: true }));
                     el.dispatchEvent(new Event('change', { bubbles: true }));
@@ -175,11 +174,11 @@ async def verify_otp(key: str = Query(None), number: str = Query(None), otp: str
             await context.close()
             return {"status": "error", "message": "OTP input box nahi mila."}
 
-        # Fast Click Validate OTP Button
-        validate_btn = page.locator('button:has-text("Validate OTP"), text=Validate OTP, input[value="Validate OTP"]').first
+        # Safe Selector for Validate OTP Button
+        validate_btn = page.get_by_text("Validate OTP").first
         await validate_btn.click(timeout=6000)
 
-        # Quick Verification Check (Bina faltu sleep ke)
+        # Login Verification Check
         try:
             await page.wait_for_selector('text=My Reports, text=Logout, text=Welcome', timeout=6000)
             await context.close()

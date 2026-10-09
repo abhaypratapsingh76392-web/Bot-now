@@ -10,5 +10,5 @@ COPY . .
 ENV PORT=8000
 EXPOSE 8000
 
-# ⚡ Gunicorn टाइमआउट 180 सेकंड कर दिया है
-CMD gunicorn --bind 0.0.0.0:$PORT --workers 1 --timeout 180 app:app
+# ⚡ गुनिकॉर्न को 1 वर्कर और 1 थ्रेड के साथ चलाएं (सर्वर क्रैश से बचने के लिए)
+CMD gunicorn --bind 0.0.0.0:$PORT --workers 1 --threads 1 --timeout 300 app:app

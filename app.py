@@ -12,9 +12,14 @@ playwright_instance = None
 browser = None
 shared_context = None
 
+# Single shared session store
 active_sessions = {}
 sessions_lock = asyncio.Lock()
-SESSION_TIMEOUT = 180  # 3 minutes me unused tab auto-close
+SESSION_TIMEOUT = 180  # 3 minutes cleanup
+
+# Concurrent Request Control (Render CPU Crash se bachane ke liye)
+MAX_CONCURRENT_REQUESTS = 5
+request_semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
 
 def get_clean_number(number: str) -> str:
     """Number me se strictly last 10 digits nikalega"""
@@ -22,7 +27,7 @@ def get_clean_number(number: str) -> str:
     return digits[-10:] if len(digits) >= 10 else digits
 
 async def cleanup_loop():
-    """Background task: Expired tabs close karke RAM free rakhta hai"""
+    """Background task: Old unused tabs ko close karke RAM free rakhta hai"""
     while True:
         await asyncio.sleep(20)
         now = time.time()
@@ -56,13 +61,13 @@ async def lifespan(app: FastAPI):
         ]
     )
     
-    # Pre-warmed Shared Context (Fast Tab Creation)
+    # Fast Shared Browser Context
     shared_context = await browser.new_context(
         user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
         viewport={"width": 360, "height": 640}
     )
     
-    # Speed Booster: Unnecessary Network Assets Block
+    # Speed Booster: Images, Media, aur Fonts Block
     await shared_context.route(
         "**/*",
         lambda route: route.abort() if route.request.resource_type in ["image", "font", "media", "other"] else route.continue_()
@@ -83,7 +88,7 @@ async def health():
     return {"status": "ok", "message": "Server active"}
 
 # -------------------------------------------------------------
-# STEP 1: Superfast OTP Send (3-5 Seconds Target)
+# STEP 1: OTP Send Request (Multi-Tab Safe with Semaphore)
 # -------------------------------------------------------------
 @app.get("/sent")
 async def sent_otp(key: str = Query(None), number: str = Query(None)):
@@ -94,72 +99,73 @@ async def sent_otp(key: str = Query(None), number: str = Query(None)):
     if not clean_num or len(clean_num) != 10:
         return {"status": "error", "message": "Valid 10-digit mobile number required"}
 
-    async with sessions_lock:
-        if clean_num in active_sessions:
-            try:
-                await active_sessions[clean_num]["page"].close()
-            except Exception:
-                pass
-            del active_sessions[clean_num]
-
-    # Concurrent Multi-Tab Page Creation
-    page = await shared_context.new_page()
-
-    try:
-        # Fast DOM load
-        await page.goto("https://m.krsnaarpl.com/validate-login.html", wait_until="domcontentloaded", timeout=12000)
-        
-        # JS Injection for Instant Number Filling
-        filled = await page.evaluate("""(num) => {
-            const input = document.querySelector('input[placeholder="Enter mobile No."], input[type="tel"], input[type="text"]');
-            if (input) {
-                input.value = num;
-                input.dispatchEvent(new Event('input', { bubbles: true }));
-                input.dispatchEvent(new Event('change', { bubbles: true }));
-                return true;
-            }
-            return false;
-        }""", clean_num)
-
-        if not filled:
-            phone_input = page.locator('input[placeholder="Enter mobile No."], input[type="tel"], input[type="text"]').first
-            await phone_input.fill(clean_num, timeout=5000)
-
-        # Trigger Get OTP
-        await page.evaluate("""() => {
-            const btns = Array.from(document.querySelectorAll('button, a, input, div'));
-            const target = btns.find(b => (b.innerText || b.value || '').includes('Get OTP'));
-            if (target) target.click();
-        }""")
-
-        # Fast 0.2s Polling Loop for 'OTP has been sent'
-        otp_sent = False
-        for _ in range(35):  # Max 7 seconds timeout
-            content = await page.content()
-            if "OTP has been sent" in content or "sent" in content.lower():
-                otp_sent = True
-                break
-            await asyncio.sleep(0.2)
-
-        if not otp_sent:
-            await page.close()
-            return {"status": "error", "message": "OTP send timeout: Mobile number check karein"}
-
-        # Store Session Mapping
+    async with request_semaphore:
         async with sessions_lock:
-            active_sessions[clean_num] = {
-                "page": page,
-                "created_at": time.time()
-            }
-        
-        return {"status": "success", "message": f"OTP sent successfully to {clean_num}"}
+            if clean_num in active_sessions:
+                try:
+                    await active_sessions[clean_num]["page"].close()
+                except Exception:
+                    pass
+                del active_sessions[clean_num]
 
-    except Exception as e:
-        await page.close()
-        return {"status": "error", "message": f"Automation Error: {str(e)}"}
+        # Har mobile request ke liye alag isolated TAB
+        page = await shared_context.new_page()
+
+        try:
+            # High Timeout (25s) for Render Server Delays
+            await page.goto("https://m.krsnaarpl.com/validate-login.html", wait_until="domcontentloaded", timeout=25000)
+            
+            # Fast JS Injection for Number Fill
+            filled = await page.evaluate("""(num) => {
+                const input = document.querySelector('input[placeholder="Enter mobile No."], input[type="tel"], input[type="text"]');
+                if (input) {
+                    input.value = num;
+                    input.dispatchEvent(new Event('input', { bubbles: true }));
+                    input.dispatchEvent(new Event('change', { bubbles: true }));
+                    return true;
+                }
+                return false;
+            }""", clean_num)
+
+            if not filled:
+                phone_input = page.locator('input[placeholder="Enter mobile No."], input[type="tel"], input[type="text"]').first
+                await phone_input.fill(clean_num, timeout=8000)
+
+            # Click Get OTP
+            await page.evaluate("""() => {
+                const btns = Array.from(document.querySelectorAll('button, a, input, div'));
+                const target = btns.find(b => (b.innerText || b.value || '').includes('Get OTP'));
+                if (target) target.click();
+            }""")
+
+            # Fast Polling for Confirmation
+            otp_sent = False
+            for _ in range(40):  # Max 12s polling
+                content = await page.content()
+                if "OTP has been sent" in content or "sent" in content.lower():
+                    otp_sent = True
+                    break
+                await asyncio.sleep(0.3)
+
+            if not otp_sent:
+                await page.close()
+                return {"status": "error", "message": "OTP send timeout! Mobile number check karein."}
+
+            # Map active tab to mobile number
+            async with sessions_lock:
+                active_sessions[clean_num] = {
+                    "page": page,
+                    "created_at": time.time()
+                }
+            
+            return {"status": "success", "message": f"OTP sent successfully to {clean_num}"}
+
+        except Exception as e:
+            await page.close()
+            return {"status": "error", "message": f"Automation Error: {str(e)}"}
 
 # -------------------------------------------------------------
-# STEP 2: Instant Single-Shot OTP Verification (2-4 Seconds Target)
+# STEP 2: Precise Digit-by-Digit OTP Fill & Verification
 # -------------------------------------------------------------
 @app.get("/verify")
 async def verify_otp(key: str = Query(None), number: str = Query(None), otp: str = Query(None)):
@@ -181,7 +187,7 @@ async def verify_otp(key: str = Query(None), number: str = Query(None), otp: str
     page = session["page"]
 
     try:
-        # ⚡ SINGLE-SHOT JS INJECTION (Sabhi 4 boxes me ek sath 10ms me fill karega)
+        # Digit-by-Digit Exact Box Injection (Box 0 -> Digit 0, Box 1 -> Digit 1...)
         success_fill = await page.evaluate("""(otp) => {
             const inputs = document.querySelectorAll('input[maxlength="1"]');
             if (inputs.length >= otp.length) {
@@ -200,18 +206,18 @@ async def verify_otp(key: str = Query(None), number: str = Query(None), otp: str
             await page.close()
             return {"status": "error", "message": "OTP input boxes nahi mile."}
 
-        # Validate OTP Click via JS
+        # Click Validate OTP
         await page.evaluate("""() => {
             const btns = Array.from(document.querySelectorAll('button, input, a'));
             const target = btns.find(b => (b.innerText || b.value || '').includes('Validate OTP'));
             if (target) target.click();
         }""")
 
-        # Fast 0.2s Response Polling Check
+        # Verification Status Check
         verified_status = "error"
         response_msg = "Galat OTP!"
 
-        for _ in range(30):  # Max 6 seconds wait
+        for _ in range(35):  # Max 10s wait
             content = await page.content()
 
             # Error Check First
@@ -220,13 +226,13 @@ async def verify_otp(key: str = Query(None), number: str = Query(None), otp: str
                 response_msg = "Galat OTP!"
                 break
 
-            # Strict Real Success Check
+            # Strict Success Check
             if any(succ in content for succ in ["My Reports", "Logout", "My Profile", "Welcome"]):
                 verified_status = "success"
                 response_msg = "OTP verified successfully!"
                 break
 
-            await asyncio.sleep(0.2)
+            await asyncio.sleep(0.3)
 
         await page.close()
         return {"status": verified_status, "message": response_msg}

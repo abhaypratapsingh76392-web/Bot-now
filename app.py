@@ -122,7 +122,7 @@ async def sent_otp(key: str = Query(None), number: str = Query(None)):
         return {"status": "error", "message": f"Automation Error: {str(e)}"}
 
 # -------------------------------------------------------------
-# STEP 2: 100% Accurate OTP Verification (Bug Fixed)
+# STEP 2: 100% Accurate OTP Verification (Final Bug Fix)
 # -------------------------------------------------------------
 @app.get("/verify")
 async def verify_otp(key: str = Query(None), number: str = Query(None), otp: str = Query(None)):
@@ -131,7 +131,6 @@ async def verify_otp(key: str = Query(None), number: str = Query(None), otp: str
     if not number or not otp:
         return {"status": "error", "message": "Both number and otp are required"}
 
-    # OTP ko clean karein
     otp = str(otp).strip()
 
     async with sessions_lock:
@@ -144,41 +143,41 @@ async def verify_otp(key: str = Query(None), number: str = Query(None), otp: str
     page = session["page"]
 
     try:
-        # 1. OTP Input Boxes ko dhoondhein
-        otp_inputs = page.locator('input[maxlength="1"]')
-        count = await otp_inputs.count()
-        
-        if count >= 4:
-            # ✅ 4 Alag-alag boxes ke liye (ह्यूमन-लाइक टाइपिंग)
-            for i in range(len(otp)):
-                if i < count:
-                    await otp_inputs.nth(i).click()
-                    await otp_inputs.nth(i).fill('') # पहले खाली करें
-                    await asyncio.sleep(0.1)
-                    await otp_inputs.nth(i).type(otp[i], delay=150) # फिर टाइप करें
-                    await asyncio.sleep(0.1)
-        else:
-            # ✅ Fallback: Agar single input box hai
-            single_input = page.locator('input[type="tel"], input[type="text"]').nth(1)
-            if await single_input.count() > 0:
-                await single_input.click()
-                await single_input.fill('')
-                await asyncio.sleep(0.1)
-                await single_input.type(otp, delay=200)
-            else:
-                await context.close()
-                return {"status": "error", "message": "OTP input box nahi mila."}
+        # 1. JavaScript Event Injection (React/Vue ke liye sabse best tarika)
+        # Yeh code har box me value set karega aur React ko force karega ki wo value read kare
+        await page.evaluate("""(otp_str) => {
+            const inputs = document.querySelectorAll('input[maxlength="1"]');
+            if (inputs.length >= otp_str.length) {
+                for (let i = 0; i < otp_str.length; i++) {
+                    const input = inputs[i];
+                    input.value = otp_str[i];
+                    input.dispatchEvent(new Event('input', { bubbles: true }));
+                    input.dispatchEvent(new Event('change', { bubbles: true }));
+                    input.dispatchEvent(new Event('blur', { bubbles: true }));
+                }
+            }
+        }""", otp)
 
-        # 2. Validate OTP Button par click karein
+        # 2. Thoda wait karein taaki website state update kar sake
+        await asyncio.sleep(1)
+
+        # 3. Fallback: Keyboard se bhi type karein (agar upar wala fail ho jaye)
+        otp_inputs = page.locator('input[maxlength="1"]')
+        if await otp_inputs.count() >= len(otp):
+            await otp_inputs.first.click()
+            for digit in otp:
+                await page.keyboard.press(digit)
+                await asyncio.sleep(0.1)
+
+        # 4. Click Validate OTP Button
         try:
             validate_btn = page.locator('button:has-text("Validate OTP"), button:has-text("Verify & Continue")').first
-            await validate_btn.click(timeout=5000)
+            await validate_btn.click(timeout=8000)
         except Exception:
-            # Agar auto-submit ho gaya ho to ignore karein
-            pass
+            pass # Agar auto-submit ho gaya ho to click fail ho sakta hai
 
-        # 3. Response ka wait karein (Success ya Error)
-        await asyncio.sleep(3) 
+        # 5. Response ka wait karein
+        await asyncio.sleep(4) 
 
         # Success Check
         success_found = False

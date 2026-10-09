@@ -69,7 +69,7 @@ async def health():
     return {"status": "ok", "message": "Server active"}
 
 # -------------------------------------------------------------
-# STEP 1: OTP Send Request (Tab Open Rakhega)
+# STEP 1: OTP Send Request
 # -------------------------------------------------------------
 @app.get("/sent")
 async def sent_otp(key: str = Query(None), number: str = Query(None)):
@@ -93,7 +93,6 @@ async def sent_otp(key: str = Query(None), number: str = Query(None)):
         viewport={"width": 360, "height": 640}
     )
     
-    # Speed Booster - Resource Blocking
     await context.route(
         "**/*",
         lambda route: route.abort() if route.request.resource_type in ["image", "stylesheet", "font", "media", "other"] else route.continue_()
@@ -104,17 +103,12 @@ async def sent_otp(key: str = Query(None), number: str = Query(None)):
     try:
         await page.goto("https://m.krsnaarpl.com/validate-login.html", wait_until="domcontentloaded", timeout=15000)
         
-        # Fill Mobile Number
         phone_input = page.locator('input[placeholder="Enter mobile No."], input[type="tel"], input[type="text"]').first
         await phone_input.fill(clean_num, timeout=10000)
         
-        # Click Get OTP
         await page.get_by_text("Get OTP").first.click(timeout=8000)
-        
-        # Wait for OTP Sent notification
         await page.wait_for_selector('text=OTP has been sent', timeout=12000)
         
-        # Save Active Session
         async with sessions_lock:
             active_sessions[clean_num] = {
                 "context": context,
@@ -129,7 +123,7 @@ async def sent_otp(key: str = Query(None), number: str = Query(None)):
         return {"status": "error", "message": f"Automation Error: {str(e)}"}
 
 # -------------------------------------------------------------
-# STEP 2: Precise Digit-by-Digit OTP Fill & Safe Click
+# STEP 2: Precise Digit-by-Digit OTP Fill (Smart Timeout Fix)
 # -------------------------------------------------------------
 @app.get("/verify")
 async def verify_otp(key: str = Query(None), number: str = Query(None), otp: str = Query(None)):
@@ -156,14 +150,11 @@ async def verify_otp(key: str = Query(None), number: str = Query(None), otp: str
         box_count = await otp_inputs.count()
 
         if box_count >= len(clean_otp):
-            # Digit 1 -> Box 0, Digit 2 -> Box 1, Digit 3 -> Box 2, Digit 4 -> Box 3
             for i in range(len(clean_otp)):
                 box = otp_inputs.nth(i)
                 digit = clean_otp[i]
                 
                 await box.fill(digit)
-                
-                # JS State Sync Event
                 await box.evaluate("""el => {
                     el.dispatchEvent(new Event('input', { bubbles: true }));
                     el.dispatchEvent(new Event('change', { bubbles: true }));
@@ -174,18 +165,44 @@ async def verify_otp(key: str = Query(None), number: str = Query(None), otp: str
             await context.close()
             return {"status": "error", "message": "OTP input box nahi mila."}
 
-        # Safe Selector for Validate OTP Button
-        validate_btn = page.get_by_text("Validate OTP").first
-        await validate_btn.click(timeout=6000)
-
-        # Login Verification Check
+        # 1. Validate Button Click with JS Fallback (Timeout Crash se bachne ke liye)
         try:
-            await page.wait_for_selector('text=My Reports, text=Logout, text=Welcome', timeout=6000)
-            await context.close()
-            return {"status": "success", "message": "OTP verified successfully!"}
+            btn = page.locator('button:has-text("Validate OTP"), input[value="Validate OTP"]').first
+            await btn.click(timeout=5000)
         except Exception:
-            await context.close()
-            return {"status": "error", "message": "Galat OTP!"}
+            await page.evaluate("""() => {
+                const btns = Array.from(document.querySelectorAll('button, input, a'));
+                const target = btns.find(b => (b.innerText || b.value || '').includes('Validate OTP'));
+                if (target) target.click();
+            }""")
+
+        # 2. Smart Polling Loop (12s tak check karega bina crash hue)
+        is_success = False
+        error_msg = "Galat OTP ya login failed."
+        start_time = time.time()
+
+        while time.time() - start_time < 12:
+            current_url = page.url
+            content = await page.content()
+
+            # Success Conditions
+            if "validate-login" not in current_url or any(x in content for x in ["My Reports", "Logout", "Dashboard", "Welcome", "My Profile"]):
+                is_success = True
+                break
+
+            # Error Conditions
+            if any(x in content for x in ["Invalid OTP", "Galat OTP", "Incorrect OTP", "Expired"]):
+                error_msg = "Galat OTP!"
+                break
+
+            await asyncio.sleep(0.5)
+
+        await context.close()
+
+        if is_success:
+            return {"status": "success", "message": "OTP verified successfully!"}
+        else:
+            return {"status": "error", "message": error_msg}
 
     except Exception as e:
         await context.close()

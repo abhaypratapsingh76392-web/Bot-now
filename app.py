@@ -64,7 +64,7 @@ async def health():
     return {"status": "ok", "message": "Server active"}
 
 # -------------------------------------------------------------
-# STEP 1: OTP Send Request (Browser Context Open Rakhega)
+# STEP 1: OTP Send Request
 # -------------------------------------------------------------
 @app.get("/sent")
 async def sent_otp(key: str = Query(None), number: str = Query(None)):
@@ -86,7 +86,7 @@ async def sent_otp(key: str = Query(None), number: str = Query(None)):
         viewport={"width": 360, "height": 640}
     )
     
-    # Extra styles/images block for 3-5s speed
+    # ⚡ स्पीड बूस्टर: इमेज, स्टाइलशीट, फॉन्ट ब्लॉक करें
     await context.route(
         "**/*",
         lambda route: route.abort() if route.request.resource_type in ["image", "stylesheet", "font", "media", "other"] else route.continue_()
@@ -95,17 +95,17 @@ async def sent_otp(key: str = Query(None), number: str = Query(None)):
     page = await context.new_page()
 
     try:
-        await page.goto("https://m.krsnaarpl.com/validate-login.html", wait_until="domcontentloaded", timeout=15000)
+        await page.goto("https://m.krsnaarpl.com/validate-login.html", wait_until="domcontentloaded", timeout=20000)
         
         # Mobile Number Fill
         phone_input = page.locator('input[placeholder="Enter mobile No."], input[type="tel"], input[type="text"]').first
         await phone_input.fill(number, timeout=10000)
         
         # Click Get OTP
-        await page.click('text=Get OTP', timeout=8000)
+        await page.click('text=Get OTP', timeout=10000)
         
         # Wait for OTP Sent text
-        await page.wait_for_selector('text=OTP has been sent', timeout=12000)
+        await page.wait_for_selector('text=OTP has been sent', timeout=15000)
         
         # Session Store
         async with sessions_lock:
@@ -131,7 +131,7 @@ async def verify_otp(key: str = Query(None), number: str = Query(None), otp: str
     if not number or not otp:
         return {"status": "error", "message": "Both number and otp are required"}
 
-    # OTP ko clean karein (agar user ne space dala ho to)
+    # OTP ko clean karein
     otp = str(otp).strip()
 
     async with sessions_lock:
@@ -149,34 +149,40 @@ async def verify_otp(key: str = Query(None), number: str = Query(None), otp: str
         count = await otp_inputs.count()
         
         if count >= 4:
-            # Agar 4 alag-alag boxes hain (jaise screenshot me hai)
-            for i in range(min(len(otp), count)):
-                await otp_inputs.nth(i).click()
-                await page.keyboard.type(otp[i])
-                await asyncio.sleep(0.2)  # React/Vue state update hone ke liye wait
+            # ✅ 4 Alag-alag boxes ke liye (ह्यूमन-लाइक टाइपिंग)
+            for i in range(len(otp)):
+                if i < count:
+                    await otp_inputs.nth(i).click()
+                    await otp_inputs.nth(i).fill('') # पहले खाली करें
+                    await asyncio.sleep(0.1)
+                    await otp_inputs.nth(i).type(otp[i], delay=150) # फिर टाइप करें
+                    await asyncio.sleep(0.1)
         else:
-            # Fallback: Agar single input box hai
+            # ✅ Fallback: Agar single input box hai
             single_input = page.locator('input[type="tel"], input[type="text"]').nth(1)
             if await single_input.count() > 0:
                 await single_input.click()
-                await page.keyboard.type(otp)
+                await single_input.fill('')
+                await asyncio.sleep(0.1)
+                await single_input.type(otp, delay=200)
             else:
+                await context.close()
                 return {"status": "error", "message": "OTP input box nahi mila."}
 
         # 2. Validate OTP Button par click karein
         try:
-            validate_btn = page.locator('button:has-text("Validate OTP"), text=Validate OTP, input[value="Validate OTP"]').first
+            validate_btn = page.locator('button:has-text("Validate OTP"), button:has-text("Verify & Continue")').first
             await validate_btn.click(timeout=5000)
         except Exception:
-            # Agar page auto-submit ho gaya ho to click fail ho sakta hai, isliye ignore karein
+            # Agar auto-submit ho gaya ho to ignore karein
             pass
 
-        # 3. Wait for Success OR Error Message
-        await asyncio.sleep(3)  # Thoda wait karein response aane ke liye
+        # 3. Response ka wait karein (Success ya Error)
+        await asyncio.sleep(3) 
 
         # Success Check
         success_found = False
-        for selector in ['text=My Reports', 'text=Logout', 'text=Welcome', 'text=Dashboard']:
+        for selector in ['text=My Reports', 'text=Logout', 'text=Dashboard', 'text=Welcome', 'text=My Profile']:
             if await page.locator(selector).count() > 0:
                 success_found = True
                 break
@@ -187,7 +193,7 @@ async def verify_otp(key: str = Query(None), number: str = Query(None), otp: str
 
         # Error Check
         error_text = "Galat OTP ya login failed."
-        if await page.locator('text=Invalid OTP').count() > 0 or await page.locator('text=Incorrect').count() > 0:
+        if await page.locator('text=Invalid OTP').count() > 0 or await page.locator('text=Galat OTP').count() > 0:
             error_text = "Invalid OTP! Kripya sahi OTP dalein."
         elif await page.locator('text=Expired').count() > 0:
             error_text = "OTP expire ho gaya hai. Kripya naya OTP bhijwayein."

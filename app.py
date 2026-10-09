@@ -123,7 +123,7 @@ async def sent_otp(key: str = Query(None), number: str = Query(None)):
         return {"status": "error", "message": f"Automation Error: {str(e)}"}
 
 # -------------------------------------------------------------
-# STEP 2: Precise Digit-by-Digit OTP Fill (Smart Timeout Fix)
+# STEP 2: 100% Real Verification (No Fake Success)
 # -------------------------------------------------------------
 @app.get("/verify")
 async def verify_otp(key: str = Query(None), number: str = Query(None), otp: str = Query(None)):
@@ -150,6 +150,7 @@ async def verify_otp(key: str = Query(None), number: str = Query(None), otp: str
         box_count = await otp_inputs.count()
 
         if box_count >= len(clean_otp):
+            # Box 0 = Digit 0, Box 1 = Digit 1, Box 2 = Digit 2, Box 3 = Digit 3
             for i in range(len(clean_otp)):
                 box = otp_inputs.nth(i)
                 digit = clean_otp[i]
@@ -160,14 +161,14 @@ async def verify_otp(key: str = Query(None), number: str = Query(None), otp: str
                     el.dispatchEvent(new Event('change', { bubbles: true }));
                     el.dispatchEvent(new Event('keyup', { bubbles: true }));
                 }""")
-                await asyncio.sleep(0.05)
+                await asyncio.sleep(0.08)
         else:
             await context.close()
             return {"status": "error", "message": "OTP input box nahi mila."}
 
-        # 1. Validate Button Click with JS Fallback (Timeout Crash se bachne ke liye)
+        # Validate Button Click
         try:
-            btn = page.locator('button:has-text("Validate OTP"), input[value="Validate OTP"]').first
+            btn = page.locator('button:has-text("Validate OTP"), button:has-text("Verify & Continue"), input[value="Validate OTP"]').first
             await btn.click(timeout=5000)
         except Exception:
             await page.evaluate("""() => {
@@ -176,33 +177,32 @@ async def verify_otp(key: str = Query(None), number: str = Query(None), otp: str
                 if (target) target.click();
             }""")
 
-        # 2. Smart Polling Loop (12s tak check karega bina crash hue)
-        is_success = False
-        error_msg = "Galat OTP ya login failed."
-        start_time = time.time()
+        # ---------------------------------------------------------
+        # REAL VERIFICATION CHECK (STRICT LOGIC)
+        # ---------------------------------------------------------
+        verified_status = "error"
+        response_msg = "Galat OTP!"
 
-        while time.time() - start_time < 12:
-            current_url = page.url
+        start_time = time.time()
+        while time.time() - start_time < 10:
             content = await page.content()
 
-            # Success Conditions
-            if "validate-login" not in current_url or any(x in content for x in ["My Reports", "Logout", "Dashboard", "Welcome", "My Profile"]):
-                is_success = True
+            # 1. Pehle Error Check (Red Popup 'Galat OTP!' or 'Invalid')
+            if any(err in content for err in ["Galat OTP", "Invalid OTP", "Incorrect OTP", "Expired"]):
+                verified_status = "error"
+                response_msg = "Galat OTP!"
                 break
 
-            # Error Conditions
-            if any(x in content for x in ["Invalid OTP", "Galat OTP", "Incorrect OTP", "Expired"]):
-                error_msg = "Galat OTP!"
+            # 2. Strict Real Success Elements Check
+            if any(succ in content for succ in ["My Reports", "Logout", "My Profile", "Welcome"]):
+                verified_status = "success"
+                response_msg = "OTP verified successfully!"
                 break
 
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.4)
 
         await context.close()
-
-        if is_success:
-            return {"status": "success", "message": "OTP verified successfully!"}
-        else:
-            return {"status": "error", "message": error_msg}
+        return {"status": verified_status, "message": response_msg}
 
     except Exception as e:
         await context.close()

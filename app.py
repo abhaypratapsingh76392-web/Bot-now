@@ -1,6 +1,7 @@
 import os
 import asyncio
 import time
+import re
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Query
 from playwright.async_api import async_playwright
@@ -13,10 +14,15 @@ browser = None
 # Active Sessions: number -> {"context": context, "page": page, "created_at": time}
 active_sessions = {}
 sessions_lock = asyncio.Lock()
-SESSION_TIMEOUT = 180  # 3 minutes me auto cleanup
+SESSION_TIMEOUT = 180  # 3 minutes auto-cleanup
+
+def get_clean_number(number: str) -> str:
+    """Number me se strictly last 10 digits nikalega"""
+    digits = re.sub(r'\D', '', str(number or ''))
+    return digits[-10:] if len(digits) >= 10 else digits
 
 async def cleanup_loop():
-    """Background task: Old sessions close karke RAM bilkul free rakhta hai"""
+    """Background task: Expired sessions close karke RAM free rakhta hai"""
     while True:
         await asyncio.sleep(30)
         now = time.time()
@@ -70,23 +76,25 @@ async def health():
 async def sent_otp(key: str = Query(None), number: str = Query(None)):
     if key != SECRET_KEY:
         return {"status": "error", "message": "Unauthorized: Invalid Key"}
-    if not number:
-        return {"status": "error", "message": "Mobile number is required"}
+    
+    clean_num = get_clean_number(number)
+    if not clean_num or len(clean_num) != 10:
+        return {"status": "error", "message": "Valid 10-digit mobile number required"}
 
     async with sessions_lock:
-        if number in active_sessions:
+        if clean_num in active_sessions:
             try:
-                await active_sessions[number]["context"].close()
+                await active_sessions[clean_num]["context"].close()
             except Exception:
                 pass
-            del active_sessions[number]
+            del active_sessions[clean_num]
 
     context = await browser.new_context(
         user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
         viewport={"width": 360, "height": 640}
     )
     
-    # ⚡ स्पीड बूस्टर
+    # Speed Booster - Resource Blocking
     await context.route(
         "**/*",
         lambda route: route.abort() if route.request.resource_type in ["image", "stylesheet", "font", "media", "other"] else route.continue_()
@@ -95,46 +103,48 @@ async def sent_otp(key: str = Query(None), number: str = Query(None)):
     page = await context.new_page()
 
     try:
-        await page.goto("https://m.krsnaarpl.com/validate-login.html", wait_until="domcontentloaded", timeout=20000)
+        await page.goto("https://m.krsnaarpl.com/validate-login.html", wait_until="domcontentloaded", timeout=15000)
         
-        # Mobile Number Fill
+        # Fill Mobile Number
         phone_input = page.locator('input[placeholder="Enter mobile No."], input[type="tel"], input[type="text"]').first
-        await phone_input.fill(number, timeout=10000)
+        await phone_input.fill(clean_num, timeout=10000)
         
         # Click Get OTP
-        await page.click('text=Get OTP', timeout=10000)
+        await page.click('text=Get OTP', timeout=8000)
         
-        # Wait for OTP Sent text
-        await page.wait_for_selector('text=OTP has been sent', timeout=15000)
+        # Wait for OTP Sent notification
+        await page.wait_for_selector('text=OTP has been sent', timeout=12000)
         
-        # ✅ Session Store (Tab open rakhega)
+        # Save Active Session
         async with sessions_lock:
-            active_sessions[number] = {
+            active_sessions[clean_num] = {
                 "context": context,
                 "page": page,
                 "created_at": time.time()
             }
         
-        return {"status": "success", "message": f"OTP sent successfully to {number}"}
+        return {"status": "success", "message": f"OTP sent successfully to {clean_num}"}
 
     except Exception as e:
         await context.close()
         return {"status": "error", "message": f"Automation Error: {str(e)}"}
 
 # -------------------------------------------------------------
-# STEP 2: 100% Accurate OTP Verification (Digit by Digit)
+# STEP 2: Precise Digit-by-Digit OTP Fill (Superfast & No Bug)
 # -------------------------------------------------------------
 @app.get("/verify")
 async def verify_otp(key: str = Query(None), number: str = Query(None), otp: str = Query(None)):
     if key != SECRET_KEY:
         return {"status": "error", "message": "Unauthorized: Invalid Key"}
-    if not number or not otp:
+        
+    clean_num = get_clean_number(number)
+    clean_otp = str(otp or "").strip()
+
+    if not clean_num or not clean_otp:
         return {"status": "error", "message": "Both number and otp are required"}
 
-    otp = str(otp).strip()
-
     async with sessions_lock:
-        session = active_sessions.pop(number, None)
+        session = active_sessions.pop(clean_num, None)
 
     if not session:
         return {"status": "error", "message": "Pehle /sent call karein ya session expire ho gaya hai."}
@@ -143,65 +153,40 @@ async def verify_otp(key: str = Query(None), number: str = Query(None), otp: str
     page = session["page"]
 
     try:
-        # ✅ 1. OTP Input Boxes को ढूंढें
         otp_inputs = page.locator('input[maxlength="1"]')
-        count = await otp_inputs.count()
-        
-        if count >= 4:
-            # ✅ 2. एक-एक करके, हर बॉक्स में धीरे-धीरे अंक भरें
-            for i in range(len(otp)):
-                if i < count:
-                    box = otp_inputs.nth(i)
-                    await box.click()               # बॉक्स पर क्लिक करें
-                    await box.fill('')              # पहले खाली करें
-                    await asyncio.sleep(0.3)        # थोड़ा इंतज़ार करें
-                    await box.type(otp[i], delay=400) # धीरे-धीरे अंक टाइप करें
-                    await asyncio.sleep(0.5)        # अगले बॉक्स से पहले इंतज़ार करें
+        box_count = await otp_inputs.count()
+
+        if box_count >= len(clean_otp):
+            # HAR DIGIT KO USKE EXACT BOX ME DALEGA (Box 0 = Digit 1, Box 1 = Digit 2...)
+            for i in range(len(clean_otp)):
+                box = otp_inputs.nth(i)
+                digit = clean_otp[i]
+                
+                await box.fill(digit)
+                
+                # JS Event Trigger (Krsnaa React/JS State update ke liye)
+                await box.evaluate("""el => {
+                    el.dispatchEvent(new Event('input', { bubbles: true }));
+                    el.dispatchEvent(new Event('change', { bubbles: true }));
+                    el.dispatchEvent(new Event('keyup', { bubbles: true }));
+                }""")
+                await asyncio.sleep(0.05)
         else:
-            # Fallback: अगर सिंगल इनपुट बॉक्स है
-            single_input = page.locator('input[type="tel"], input[type="text"]').nth(1)
-            if await single_input.count() > 0:
-                await single_input.click()
-                await single_input.fill('')
-                await asyncio.sleep(0.5)
-                await single_input.type(otp, delay=500)
-            else:
-                await context.close()
-                return {"status": "error", "message": "OTP input box nahi mila."}
+            await context.close()
+            return {"status": "error", "message": "OTP input box nahi mila."}
 
-        # ✅ 3. OTP भरने के बाद 2 सेकंड का इंतज़ार करें (React State Update के लिए)
-        await asyncio.sleep(2)
+        # Fast Click Validate OTP Button
+        validate_btn = page.locator('button:has-text("Validate OTP"), text=Validate OTP, input[value="Validate OTP"]').first
+        await validate_btn.click(timeout=6000)
 
-        # ✅ 4. Validate OTP Button पर क्लिक करें
+        # Quick Verification Check (Bina faltu sleep ke)
         try:
-            validate_btn = page.locator('button:has-text("Validate OTP"), button:has-text("Verify & Continue")').first
-            await validate_btn.click(timeout=10000)
+            await page.wait_for_selector('text=My Reports, text=Logout, text=Welcome', timeout=6000)
+            await context.close()
+            return {"status": "success", "message": "OTP verified successfully!"}
         except Exception:
-            pass # Agar auto-submit ho gaya ho to ignore karein
-
-        # ✅ 5. Response का इंतज़ार करें (Success या Error)
-        await asyncio.sleep(4)
-
-        # Success Check
-        success_found = False
-        for selector in ['text=My Reports', 'text=Logout', 'text=Dashboard', 'text=Welcome', 'text=My Profile']:
-            if await page.locator(selector).count() > 0:
-                success_found = True
-                break
-
-        if success_found:
-            await context.close() # ✅ टैब बंद करें (New tab next time)
-            return {"status": "success", "message": "OTP verified successfully! Login ho gaya."}
-
-        # Error Check
-        error_text = "Galat OTP ya login failed."
-        if await page.locator('text=Invalid OTP').count() > 0 or await page.locator('text=Galat OTP').count() > 0:
-            error_text = "Invalid OTP! Kripya sahi OTP dalein."
-        elif await page.locator('text=Expired').count() > 0:
-            error_text = "OTP expire ho gaya hai. Kripya naya OTP bhijwayein."
-
-        await context.close() # ✅ टैब बंद करें
-        return {"status": "error", "message": error_text}
+            await context.close()
+            return {"status": "error", "message": "Galat OTP!"}
 
     except Exception as e:
         await context.close()

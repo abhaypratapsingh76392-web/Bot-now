@@ -10,10 +10,11 @@ SECRET_KEY = "Akshay12apidev"
 
 playwright_instance = None
 browser = None
+shared_context = None
 
 active_sessions = {}
 sessions_lock = asyncio.Lock()
-SESSION_TIMEOUT = 180  # 3 minutes auto-cleanup
+SESSION_TIMEOUT = 180  # 3 minutes me unused tab auto-close hoga
 
 def get_clean_number(number: str) -> str:
     """Number me se strictly last 10 digits nikalega"""
@@ -21,7 +22,7 @@ def get_clean_number(number: str) -> str:
     return digits[-10:] if len(digits) >= 10 else digits
 
 async def cleanup_loop():
-    """Background task: Expired sessions close karke RAM free rakhta hai"""
+    """Background task: Expired tabs ko close karke RAM free rakhta hai"""
     while True:
         await asyncio.sleep(30)
         now = time.time()
@@ -34,13 +35,13 @@ async def cleanup_loop():
                 sess = active_sessions.pop(num, None)
                 if sess:
                     try:
-                        await sess["context"].close()
+                        await sess["page"].close()
                     except Exception:
                         pass
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global playwright_instance, browser
+    global playwright_instance, browser, shared_context
     playwright_instance = await async_playwright().start()
     
     browser = await playwright_instance.chromium.launch(
@@ -54,6 +55,19 @@ async def lifespan(app: FastAPI):
             "--blink-settings=imagesEnabled=false"
         ]
     )
+    
+    # Single Shared Context (RAM aur CPU save karne ke liye)
+    shared_context = await browser.new_context(
+        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+        viewport={"width": 360, "height": 640}
+    )
+    
+    # Global Speed Booster (Images, CSS, Fonts block)
+    await shared_context.route(
+        "**/*",
+        lambda route: route.abort() if route.request.resource_type in ["image", "stylesheet", "font", "media", "other"] else route.continue_()
+    )
+
     cleanup_task = asyncio.create_task(cleanup_loop())
     yield
     cleanup_task.cancel()
@@ -69,7 +83,7 @@ async def health():
     return {"status": "ok", "message": "Server active"}
 
 # -------------------------------------------------------------
-# STEP 1: OTP Send Request
+# STEP 1: OTP Send Request (Dedicated Isolated Tab Open)
 # -------------------------------------------------------------
 @app.get("/sent")
 async def sent_otp(key: str = Query(None), number: str = Query(None)):
@@ -83,35 +97,26 @@ async def sent_otp(key: str = Query(None), number: str = Query(None)):
     async with sessions_lock:
         if clean_num in active_sessions:
             try:
-                await active_sessions[clean_num]["context"].close()
+                await active_sessions[clean_num]["page"].close()
             except Exception:
                 pass
             del active_sessions[clean_num]
 
-    context = await browser.new_context(
-        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
-        viewport={"width": 360, "height": 640}
-    )
-    
-    await context.route(
-        "**/*",
-        lambda route: route.abort() if route.request.resource_type in ["image", "stylesheet", "font", "media", "other"] else route.continue_()
-    )
-    
-    page = await context.new_page()
+    # Shared Context se Naya Isolated Tab (Page) banega
+    page = await shared_context.new_page()
 
     try:
-        await page.goto("https://m.krsnaarpl.com/validate-login.html", wait_until="domcontentloaded", timeout=15000)
+        await page.goto("https://m.krsnaarpl.com/validate-login.html", wait_until="domcontentloaded", timeout=25000)
         
         phone_input = page.locator('input[placeholder="Enter mobile No."], input[type="tel"], input[type="text"]').first
         await phone_input.fill(clean_num, timeout=10000)
         
         await page.get_by_text("Get OTP").first.click(timeout=8000)
-        await page.wait_for_selector('text=OTP has been sent', timeout=12000)
+        await page.wait_for_selector('text=OTP has been sent', timeout=15000)
         
+        # Exact Number ka Tab Mapping
         async with sessions_lock:
             active_sessions[clean_num] = {
-                "context": context,
                 "page": page,
                 "created_at": time.time()
             }
@@ -119,11 +124,11 @@ async def sent_otp(key: str = Query(None), number: str = Query(None)):
         return {"status": "success", "message": f"OTP sent successfully to {clean_num}"}
 
     except Exception as e:
-        await context.close()
+        await page.close()
         return {"status": "error", "message": f"Automation Error: {str(e)}"}
 
 # -------------------------------------------------------------
-# STEP 2: 100% Real Verification (No Fake Success)
+# STEP 2: Exact Tab OTP Fill & Real Verification
 # -------------------------------------------------------------
 @app.get("/verify")
 async def verify_otp(key: str = Query(None), number: str = Query(None), otp: str = Query(None)):
@@ -142,7 +147,6 @@ async def verify_otp(key: str = Query(None), number: str = Query(None), otp: str
     if not session:
         return {"status": "error", "message": "Pehle /sent call karein ya session expire ho gaya hai."}
 
-    context = session["context"]
     page = session["page"]
 
     try:
@@ -163,13 +167,13 @@ async def verify_otp(key: str = Query(None), number: str = Query(None), otp: str
                 }""")
                 await asyncio.sleep(0.08)
         else:
-            await context.close()
+            await page.close()
             return {"status": "error", "message": "OTP input box nahi mila."}
 
         # Validate Button Click
         try:
             btn = page.locator('button:has-text("Validate OTP"), button:has-text("Verify & Continue"), input[value="Validate OTP"]').first
-            await btn.click(timeout=5000)
+            await btn.click(timeout=6000)
         except Exception:
             await page.evaluate("""() => {
                 const btns = Array.from(document.querySelectorAll('button, input, a'));
@@ -177,23 +181,21 @@ async def verify_otp(key: str = Query(None), number: str = Query(None), otp: str
                 if (target) target.click();
             }""")
 
-        # ---------------------------------------------------------
-        # REAL VERIFICATION CHECK (STRICT LOGIC)
-        # ---------------------------------------------------------
+        # Real Strict Verification Check
         verified_status = "error"
         response_msg = "Galat OTP!"
 
         start_time = time.time()
-        while time.time() - start_time < 10:
+        while time.time() - start_time < 12:
             content = await page.content()
 
-            # 1. Pehle Error Check (Red Popup 'Galat OTP!' or 'Invalid')
+            # Error Check
             if any(err in content for err in ["Galat OTP", "Invalid OTP", "Incorrect OTP", "Expired"]):
                 verified_status = "error"
                 response_msg = "Galat OTP!"
                 break
 
-            # 2. Strict Real Success Elements Check
+            # Success Check
             if any(succ in content for succ in ["My Reports", "Logout", "My Profile", "Welcome"]):
                 verified_status = "success"
                 response_msg = "OTP verified successfully!"
@@ -201,11 +203,11 @@ async def verify_otp(key: str = Query(None), number: str = Query(None), otp: str
 
             await asyncio.sleep(0.4)
 
-        await context.close()
+        await page.close()
         return {"status": verified_status, "message": response_msg}
 
     except Exception as e:
-        await context.close()
+        await page.close()
         return {"status": "error", "message": f"Automation Error: {str(e)}"}
 
 if __name__ == "__main__":

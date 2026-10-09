@@ -64,7 +64,7 @@ async def health():
     return {"status": "ok", "message": "Server active"}
 
 # -------------------------------------------------------------
-# STEP 1: OTP Send Request
+# STEP 1: OTP Send Request (Tab Open Rakhega)
 # -------------------------------------------------------------
 @app.get("/sent")
 async def sent_otp(key: str = Query(None), number: str = Query(None)):
@@ -86,7 +86,7 @@ async def sent_otp(key: str = Query(None), number: str = Query(None)):
         viewport={"width": 360, "height": 640}
     )
     
-    # ⚡ स्पीड बूस्टर: इमेज, स्टाइलशीट, फॉन्ट ब्लॉक करें
+    # ⚡ स्पीड बूस्टर
     await context.route(
         "**/*",
         lambda route: route.abort() if route.request.resource_type in ["image", "stylesheet", "font", "media", "other"] else route.continue_()
@@ -107,7 +107,7 @@ async def sent_otp(key: str = Query(None), number: str = Query(None)):
         # Wait for OTP Sent text
         await page.wait_for_selector('text=OTP has been sent', timeout=15000)
         
-        # Session Store
+        # ✅ Session Store (Tab open rakhega)
         async with sessions_lock:
             active_sessions[number] = {
                 "context": context,
@@ -122,7 +122,7 @@ async def sent_otp(key: str = Query(None), number: str = Query(None)):
         return {"status": "error", "message": f"Automation Error: {str(e)}"}
 
 # -------------------------------------------------------------
-# STEP 2: 100% Accurate OTP Verification (Digit by Digit Fixed)
+# STEP 2: 100% Accurate OTP Verification (Digit by Digit)
 # -------------------------------------------------------------
 @app.get("/verify")
 async def verify_otp(key: str = Query(None), number: str = Query(None), otp: str = Query(None)):
@@ -143,22 +143,22 @@ async def verify_otp(key: str = Query(None), number: str = Query(None), otp: str
     page = session["page"]
 
     try:
-        # 1. OTP Input Boxes ko dhoondhein
+        # ✅ 1. OTP Input Boxes को ढूंढें
         otp_inputs = page.locator('input[maxlength="1"]')
         count = await otp_inputs.count()
         
         if count >= 4:
-            # ✅ बिल्कुल वैसा ही जैसा तुमने कहा: एक-एक करके अंक भरो
+            # ✅ 2. एक-एक करके, हर बॉक्स में धीरे-धीरे अंक भरें
             for i in range(len(otp)):
                 if i < count:
                     box = otp_inputs.nth(i)
-                    await box.click()            # बॉक्स पर क्लिक करो
-                    await box.fill('')           # पहले खाली करो
-                    await asyncio.sleep(0.3)     # थोड़ा इंतज़ार करो
-                    await box.type(otp[i], delay=500)  # धीरे-धीरे अंक टाइप करो
-                    await asyncio.sleep(0.5)     # अगले अंक से पहले इंतज़ार करो
+                    await box.click()               # बॉक्स पर क्लिक करें
+                    await box.fill('')              # पहले खाली करें
+                    await asyncio.sleep(0.3)        # थोड़ा इंतज़ार करें
+                    await box.type(otp[i], delay=400) # धीरे-धीरे अंक टाइप करें
+                    await asyncio.sleep(0.5)        # अगले बॉक्स से पहले इंतज़ार करें
         else:
-            # Fallback: Agar single input box hai
+            # Fallback: अगर सिंगल इनपुट बॉक्स है
             single_input = page.locator('input[type="tel"], input[type="text"]').nth(1)
             if await single_input.count() > 0:
                 await single_input.click()
@@ -169,17 +169,17 @@ async def verify_otp(key: str = Query(None), number: str = Query(None), otp: str
                 await context.close()
                 return {"status": "error", "message": "OTP input box nahi mila."}
 
-        # 2. OTP भरने के बाद थोड़ा इंतज़ार करें ताकि वेबसाइट का स्टेट अपडेट हो जाए
+        # ✅ 3. OTP भरने के बाद 2 सेकंड का इंतज़ार करें (React State Update के लिए)
         await asyncio.sleep(2)
 
-        # 3. Validate OTP Button par click karein
+        # ✅ 4. Validate OTP Button पर क्लिक करें
         try:
             validate_btn = page.locator('button:has-text("Validate OTP"), button:has-text("Verify & Continue")').first
             await validate_btn.click(timeout=10000)
         except Exception:
             pass # Agar auto-submit ho gaya ho to ignore karein
 
-        # 4. Response ka wait karein (Success ya Error)
+        # ✅ 5. Response का इंतज़ार करें (Success या Error)
         await asyncio.sleep(4)
 
         # Success Check
@@ -190,7 +190,7 @@ async def verify_otp(key: str = Query(None), number: str = Query(None), otp: str
                 break
 
         if success_found:
-            await context.close()
+            await context.close() # ✅ टैब बंद करें (New tab next time)
             return {"status": "success", "message": "OTP verified successfully! Login ho gaya."}
 
         # Error Check
@@ -200,7 +200,7 @@ async def verify_otp(key: str = Query(None), number: str = Query(None), otp: str
         elif await page.locator('text=Expired').count() > 0:
             error_text = "OTP expire ho gaya hai. Kripya naya OTP bhijwayein."
 
-        await context.close()
+        await context.close() # ✅ टैब बंद करें
         return {"status": "error", "message": error_text}
 
     except Exception as e:

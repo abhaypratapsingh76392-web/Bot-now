@@ -122,7 +122,7 @@ async def sent_otp(key: str = Query(None), number: str = Query(None)):
         return {"status": "error", "message": f"Automation Error: {str(e)}"}
 
 # -------------------------------------------------------------
-# STEP 2: 100% Accurate OTP Verification (Final Bug Fix)
+# STEP 2: 100% Accurate OTP Verification (Digit by Digit Fixed)
 # -------------------------------------------------------------
 @app.get("/verify")
 async def verify_otp(key: str = Query(None), number: str = Query(None), otp: str = Query(None)):
@@ -143,41 +143,44 @@ async def verify_otp(key: str = Query(None), number: str = Query(None), otp: str
     page = session["page"]
 
     try:
-        # 1. JavaScript Event Injection (React/Vue ke liye sabse best tarika)
-        # Yeh code har box me value set karega aur React ko force karega ki wo value read kare
-        await page.evaluate("""(otp_str) => {
-            const inputs = document.querySelectorAll('input[maxlength="1"]');
-            if (inputs.length >= otp_str.length) {
-                for (let i = 0; i < otp_str.length; i++) {
-                    const input = inputs[i];
-                    input.value = otp_str[i];
-                    input.dispatchEvent(new Event('input', { bubbles: true }));
-                    input.dispatchEvent(new Event('change', { bubbles: true }));
-                    input.dispatchEvent(new Event('blur', { bubbles: true }));
-                }
-            }
-        }""", otp)
-
-        # 2. Thoda wait karein taaki website state update kar sake
-        await asyncio.sleep(1)
-
-        # 3. Fallback: Keyboard se bhi type karein (agar upar wala fail ho jaye)
+        # 1. OTP Input Boxes ko dhoondhein
         otp_inputs = page.locator('input[maxlength="1"]')
-        if await otp_inputs.count() >= len(otp):
-            await otp_inputs.first.click()
-            for digit in otp:
-                await page.keyboard.press(digit)
-                await asyncio.sleep(0.1)
+        count = await otp_inputs.count()
+        
+        if count >= 4:
+            # ✅ बिल्कुल वैसा ही जैसा तुमने कहा: एक-एक करके अंक भरो
+            for i in range(len(otp)):
+                if i < count:
+                    box = otp_inputs.nth(i)
+                    await box.click()            # बॉक्स पर क्लिक करो
+                    await box.fill('')           # पहले खाली करो
+                    await asyncio.sleep(0.3)     # थोड़ा इंतज़ार करो
+                    await box.type(otp[i], delay=500)  # धीरे-धीरे अंक टाइप करो
+                    await asyncio.sleep(0.5)     # अगले अंक से पहले इंतज़ार करो
+        else:
+            # Fallback: Agar single input box hai
+            single_input = page.locator('input[type="tel"], input[type="text"]').nth(1)
+            if await single_input.count() > 0:
+                await single_input.click()
+                await single_input.fill('')
+                await asyncio.sleep(0.5)
+                await single_input.type(otp, delay=500)
+            else:
+                await context.close()
+                return {"status": "error", "message": "OTP input box nahi mila."}
 
-        # 4. Click Validate OTP Button
+        # 2. OTP भरने के बाद थोड़ा इंतज़ार करें ताकि वेबसाइट का स्टेट अपडेट हो जाए
+        await asyncio.sleep(2)
+
+        # 3. Validate OTP Button par click karein
         try:
             validate_btn = page.locator('button:has-text("Validate OTP"), button:has-text("Verify & Continue")').first
-            await validate_btn.click(timeout=8000)
+            await validate_btn.click(timeout=10000)
         except Exception:
-            pass # Agar auto-submit ho gaya ho to click fail ho sakta hai
+            pass # Agar auto-submit ho gaya ho to ignore karein
 
-        # 5. Response ka wait karein
-        await asyncio.sleep(4) 
+        # 4. Response ka wait karein (Success ya Error)
+        await asyncio.sleep(4)
 
         # Success Check
         success_found = False

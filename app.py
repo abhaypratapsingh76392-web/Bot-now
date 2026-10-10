@@ -88,7 +88,7 @@ async def health():
     return {"status": "ok", "message": "Server active"}
 
 # -------------------------------------------------------------
-# STEP 1: OTP Send Request (Multi-Tab Safe with Semaphore)
+# STEP 1: OTP Send Request (Fixed Bug: Number par OTP aayega ab)
 # -------------------------------------------------------------
 @app.get("/sent")
 async def sent_otp(key: str = Query(None), number: str = Query(None)):
@@ -115,7 +115,7 @@ async def sent_otp(key: str = Query(None), number: str = Query(None)):
             # High Timeout (25s) for Render Server Delays
             await page.goto("https://m.krsnaarpl.com/validate-login.html", wait_until="domcontentloaded", timeout=25000)
             
-            # Fast JS Injection for Number Fill
+            # Fast JS Injection for Number Fill (Ye sahi kaam kar raha tha)
             filled = await page.evaluate("""(num) => {
                 const input = document.querySelector('input[placeholder="Enter mobile No."], input[type="tel"], input[type="text"]');
                 if (input) {
@@ -131,25 +131,40 @@ async def sent_otp(key: str = Query(None), number: str = Query(None)):
                 phone_input = page.locator('input[placeholder="Enter mobile No."], input[type="tel"], input[type="text"]').first
                 await phone_input.fill(clean_num, timeout=8000)
 
-            # Click Get OTP
-            await page.evaluate("""() => {
-                const btns = Array.from(document.querySelectorAll('button, a, input, div'));
-                const target = btns.find(b => (b.innerText || b.value || '').includes('Get OTP'));
-                if (target) target.click();
-            }""")
+            # ✅ FIX 1: Native Playwright Click (React ka API call trigger karne ke liye)
+            # JavaScript click se React onClick fire nahi hota, isliye SMS nahi jata tha
+            try:
+                await page.click('text=Get OTP', timeout=10000)
+            except Exception:
+                # Fallback agar button text match na ho
+                await page.evaluate("""() => {
+                    const btns = Array.from(document.querySelectorAll('button, a, input, div'));
+                    const target = btns.find(b => (b.innerText || b.value || '').includes('Get OTP'));
+                    if (target) target.click();
+                }""")
 
-            # Fast Polling for Confirmation
+            # ✅ FIX 2: Exact Success Check (Ab "sent" word ka false positive nahi hoga)
             otp_sent = False
             for _ in range(40):  # Max 12s polling
                 content = await page.content()
-                if "OTP has been sent" in content or "sent" in content.lower():
+                # Sirf exact text check karein, ya OTP input boxes check karein
+                if "OTP has been sent" in content:
                     otp_sent = True
                     break
+                
+                # Agar OTP boxes dikh gaye to bhi success maan lo
+                try:
+                    if await page.locator('input[maxlength="1"]').count() > 0:
+                        otp_sent = True
+                        break
+                except:
+                    pass
+
                 await asyncio.sleep(0.3)
 
             if not otp_sent:
                 await page.close()
-                return {"status": "error", "message": "OTP send timeout! Mobile number check karein."}
+                return {"status": "error", "message": "OTP send timeout! Mobile number check karein ya thodi der baad try karein."}
 
             # Map active tab to mobile number
             async with sessions_lock:
@@ -206,12 +221,11 @@ async def verify_otp(key: str = Query(None), number: str = Query(None), otp: str
             await page.close()
             return {"status": "error", "message": "OTP input boxes nahi mile."}
 
-        # Click Validate OTP
-        await page.evaluate("""() => {
-            const btns = Array.from(document.querySelectorAll('button, input, a'));
-            const target = btns.find(b => (b.innerText || b.value || '').includes('Validate OTP'));
-            if (target) target.click();
-        }""")
+        # Click Validate OTP (Native Playwright click is better here too)
+        try:
+            await page.click('text=Validate OTP', timeout=10000)
+        except Exception:
+            await page.click('text=Verify & Continue', timeout=5000)
 
         # Verification Status Check
         verified_status = "error"

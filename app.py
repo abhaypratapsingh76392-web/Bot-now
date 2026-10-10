@@ -16,7 +16,7 @@ active_sessions = {}
 sessions_lock = asyncio.Lock()
 SESSION_TIMEOUT = 180  # 3 minutes me auto cleanup
 
-# Concurrent Request Control
+# Concurrent Request Control (Server Crash se bachane ke liye)
 MAX_CONCURRENT_REQUESTS = 5
 request_semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
 
@@ -74,7 +74,7 @@ async def health():
     return {"status": "ok", "message": "Server active"}
 
 # -------------------------------------------------------------
-# STEP 1: OTP Send Request (AAPKA OLD WORKING SYSTEM)
+# STEP 1: OTP Send Request (OLD WORKING SYSTEM)
 # -------------------------------------------------------------
 @app.get("/sent")
 async def sent_otp(key: str = Query(None), number: str = Query(None)):
@@ -100,7 +100,7 @@ async def sent_otp(key: str = Query(None), number: str = Query(None)):
             viewport={"width": 360, "height": 640}
         )
         
-        # Speed Booster (Images block karne ke liye)
+        # Speed Booster: Images, Stylesheets, Fonts Block
         await context.route(
             "**/*",
             lambda route: route.abort() if route.request.resource_type in ["image", "stylesheet", "font", "media"] else route.continue_()
@@ -111,7 +111,7 @@ async def sent_otp(key: str = Query(None), number: str = Query(None)):
         try:
             await page.goto("https://m.krsnaarpl.com/validate-login.html", wait_until="domcontentloaded", timeout=25000)
             
-            # Aapka Original Native Fill Method (Jis se asli me OTP aata hai)
+            # Aapka Original Native Fill Method
             phone_input = page.locator('input[placeholder="Enter mobile No."], input[type="tel"], input[type="text"]').first
             await phone_input.fill(clean_num, timeout=10000)
             
@@ -121,6 +121,7 @@ async def sent_otp(key: str = Query(None), number: str = Query(None)):
             # Asli Success Text ka wait karna
             await page.wait_for_selector('text=OTP has been sent', state='visible', timeout=15000)
             
+            # Session Save
             async with sessions_lock:
                 active_sessions[clean_num] = {
                     "context": context,
@@ -135,7 +136,7 @@ async def sent_otp(key: str = Query(None), number: str = Query(None)):
             return {"status": "error", "message": f"Automation Error: {str(e)}"}
 
 # -------------------------------------------------------------
-# STEP 2: 100% Accurate OTP Verification (NATIVE KEYBOARD TYPING)
+# STEP 2: 100% Accurate OTP Verification (JS INJECTION + FALLBACK)
 # -------------------------------------------------------------
 @app.get("/verify")
 async def verify_otp(key: str = Query(None), number: str = Query(None), otp: str = Query(None)):
@@ -158,61 +159,69 @@ async def verify_otp(key: str = Query(None), number: str = Query(None), otp: str
     page = session["page"]
 
     try:
-        # === 100% ACCURATE OTP FILL SYSTEM (Keyboard Type) ===
-        otp_boxes = page.locator('input[maxlength="1"]')
-        box_count = await otp_boxes.count()
-        
-        if box_count > 0:
-            # Pehle box par click karke usko focus me late hain
-            await otp_boxes.first.click(timeout=5000)
-            
-            # Asli keyboard jaise ek-ek digit type karte hain taaki "Galat OTP" na aaye
-            for digit in clean_otp:
-                await page.keyboard.press(digit)
-                await asyncio.sleep(0.1)
-        else:
-            await context.close()
-            return {"status": "error", "message": "OTP input boxes nahi mile."}
-        
-        await asyncio.sleep(0.5)
-
-        # Click Validate OTP (Native Fallback ke sath)
-        try:
-            clicked = await page.evaluate("""() => {
-                const btns = Array.from(document.querySelectorAll('button, input, a'));
-                const target = btns.find(b => {
-                    const text = (b.innerText || b.value || '').toLowerCase();
-                    return text.includes('validate') || text.includes('verify') || text.includes('submit');
-                });
-                if (target) {
-                    target.click();
-                    return true;
+        # 1. OTP भरने का सबसे सटीक तरीका (React ko Force Update karne ke liye)
+        success_fill = await page.evaluate("""(otp) => {
+            const inputs = document.querySelectorAll('input[maxlength="1"]');
+            if (inputs.length >= otp.length) {
+                for (let i = 0; i < otp.length; i++) {
+                    inputs[i].value = otp[i];
+                    inputs[i].dispatchEvent(new Event('input', { bubbles: true }));
+                    inputs[i].dispatchEvent(new Event('change', { bubbles: true }));
+                    inputs[i].dispatchEvent(new Event('keyup', { bubbles: true }));
+                    inputs[i].dispatchEvent(new Event('blur', { bubbles: true }));
                 }
-                return false;
-            }""")
-            
-            if not clicked:
-                await page.locator('button:has-text("Validate"), button:has-text("Verify")').first.click(timeout=8000)
-        except Exception:
-            pass
+                return true;
+            }
+            return false;
+        }""", clean_otp)
 
-        # Verification Status Check
+        # Fallback: Agar JS injection fail ho jaye (bahut rare case)
+        if not success_fill:
+            otp_boxes = page.locator('input[maxlength="1"]')
+            box_count = await otp_boxes.count()
+            if box_count >= len(clean_otp):
+                await otp_boxes.first.click(timeout=5000)
+                for digit in clean_otp:
+                    await page.keyboard.press(digit)
+                    await asyncio.sleep(0.15)
+            else:
+                await context.close()
+                return {"status": "error", "message": "OTP input boxes nahi mile."}
+
+        # ⚡ बहुत जरूरी: OTP भरने के बाद 2 सेकंड का इंतज़ार (State Update ke liye)
+        await asyncio.sleep(2)
+
+        # 2. Validate OTP बटन पर क्लिक करें
+        try:
+            await page.click('text=Validate OTP', timeout=15000)
+        except Exception:
+            try:
+                await page.click('text=Verify & Continue', timeout=15000)
+            except Exception:
+                # Fallback JavaScript click
+                await page.evaluate("""() => {
+                    const btns = Array.from(document.querySelectorAll('button, input, a'));
+                    const target = btns.find(b => (b.innerText || b.value || '').includes('Validate') || (b.innerText || b.value || '').includes('Verify'));
+                    if (target) target.click();
+                }""")
+
+        # 3. Verification Status Check (Max 15 seconds)
         verified_status = "error"
         response_msg = "Galat OTP!"
 
-        for _ in range(35):  # Max 10s wait
+        for _ in range(50):
             content = await page.content()
-
-            # Strict Success Check
-            if any(succ in content for succ in ["My Reports", "Logout", "My Profile", "Welcome", "Dashboard"]):
-                verified_status = "success"
-                response_msg = "OTP verified successfully!"
-                break
 
             # Error Check
             if any(err in content for err in ["Galat OTP", "Invalid OTP", "Incorrect OTP", "Expired"]):
                 verified_status = "error"
                 response_msg = "Galat OTP!"
+                break
+
+            # Strict Success Check
+            if any(succ in content for succ in ["My Reports", "Logout", "My Profile", "Welcome", "Dashboard"]):
+                verified_status = "success"
+                response_msg = "OTP verified successfully!"
                 break
 
             await asyncio.sleep(0.3)
@@ -221,7 +230,10 @@ async def verify_otp(key: str = Query(None), number: str = Query(None), otp: str
         return {"status": verified_status, "message": response_msg}
 
     except Exception as e:
-        await context.close()
+        try:
+            await context.close()
+        except:
+            pass
         return {"status": "error", "message": f"Automation Error: {str(e)}"}
 
 if __name__ == "__main__":

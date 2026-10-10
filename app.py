@@ -115,7 +115,7 @@ async def sent_otp(key: str = Query(None), number: str = Query(None)):
             # High Timeout (25s) for Render Server Delays
             await page.goto("https://m.krsnaarpl.com/validate-login.html", wait_until="domcontentloaded", timeout=25000)
             
-            # Fast JS Injection for Number Fill (Ye sahi kaam kar raha tha)
+            # Fast JS Injection for Number Fill
             filled = await page.evaluate("""(num) => {
                 const input = document.querySelector('input[placeholder="Enter mobile No."], input[type="tel"], input[type="text"]');
                 if (input) {
